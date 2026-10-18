@@ -37,7 +37,7 @@ def run_gui():
     srv, port = server.make_server()
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     url = "http://127.0.0.1:%d" % port
-    title = "rexauto · Recompilation Engine"
+    title = "Reuaito · Recompilation Engine"
     try:
         import webview
         webview.create_window(title, url, width=1240, height=880, min_size=(900, 680),
