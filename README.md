@@ -1,3 +1,15 @@
+# Reuaito — independent rexauto source build
+
+This repository is an independent source import of [Player124413/rexauto](https://github.com/Player124413/rexauto), retaining its MIT license, upstream authorship, code-generation pipeline and third-party notices. **No Xbox 360 games or copyrighted game assets are included.**
+
+**Windows x64 executable:** open [Build Reuaito Windows EXE](https://github.com/kuaan08/reuaito/actions/workflows/build-windows.yml), choose the latest successful run, then download the **Reuaito-Windows-x64** artifact. Unzip and run `reuaito.exe`. WebView2 is required for the embedded interface. ReXGlue SDK, LLVM and Visual Studio C++ tools remain separate prerequisites (check Setup).
+
+See [REUAITO_BUILD.md](REUAITO_BUILD.md) for the packaging and compatibility limitations.
+
+---
+
+## Original rexauto documentation
+
 # rexauto
 
 **Turn an Xbox 360 game into a native PC executable — automatically.**
