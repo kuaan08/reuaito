@@ -102,6 +102,17 @@ def _first_working_python(*candidates):
     return None
 
 
+def find_build_executable(override, command, candidates=()):
+    """Resolve an actual CMake/Ninja executable before VS setup mutates PATH."""
+    for value in (override, shutil.which(command), *candidates):
+        if not value:
+            continue
+        p = os.path.expandvars(os.path.expanduser(str(value).strip().strip('"')))
+        if os.path.isfile(p):
+            return os.path.abspath(p)
+    return None
+
+
 def detect_env():
     pf = os.environ.get("ProgramFiles", r"C:\Program Files")
     pf86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
@@ -111,7 +122,22 @@ def detect_env():
     app = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else HERE
     def near(*rel):
         return find_first([os.path.join(app, *r.split("/")) for r in rel])
+    vs_cmake = os.path.join("Microsoft Visual Studio", "*", "*", "Common7",
+                            "IDE", "CommonExtensions", "Microsoft", "CMake", "CMake", "bin")
+    cmake = find_build_executable(e("CMAKE"), "cmake", [
+        os.path.join(pf, "CMake", "bin", "cmake.exe"),
+        *glob.glob(os.path.join(pf, vs_cmake, "cmake.exe")),
+        *glob.glob(os.path.join(pf86, vs_cmake, "cmake.exe")),
+    ])
+    ninja = find_build_executable(e("NINJA"), "ninja", [
+        os.path.join(os.path.dirname(cmake), "ninja.exe") if cmake else None,
+        *glob.glob(os.path.join(pf, vs_cmake, "ninja.exe")),
+        *glob.glob(os.path.join(pf86, vs_cmake, "ninja.exe")),
+        os.path.join(e("LOCALAPPDATA", ""), "Microsoft", "WinGet", "Links", "ninja.exe"),
+    ])
     return {
+        "cmake": cmake,
+        "ninja": ninja,
         "vcvars": e("VCVARS") or newest_glob(
             os.path.join(pf86, "Microsoft Visual Studio", "*", "*", "VC", "Auxiliary",
                          "Build", "vcvars64.bat")),
@@ -949,38 +975,24 @@ def stage_jumptables(ctx):
 
 
 def write_build_bat(ctx, parallel=None):
-    # A clang-OOM lesson (see the "LLVM ERROR: out of memory" handlers) is
-    # PERSISTENT: once a port's giant TUs prove they can't take the default
-    # 18 concurrent frontends, every later bat regeneration -- heal-loop,
-    # re-runs, module builds sharing the work dir -- inherits the reduced -j
-    # instead of re-discovering the crash. Explicit `parallel` still wins.
+    """Fail-fast Windows CMake/Ninja build with resolved absolute executables."""
     if parallel is None:
         parallel = ctx.load_state().get("build_parallel")
     bat = os.path.join(ctx.work, "_build.bat")
+    cmake, ninja = ctx.env.get("cmake"), ctx.env.get("ninja")
+    if not all(p and os.path.isfile(p) for p in (cmake, ninja)):
+        raise RuntimeError("Missing CMake or Ninja: open Setup, install both, restart Reuaito.")
+    cmake_cmd = '"%s"' % cmake.replace("\\", "/")
+    ninja_path = ninja.replace("\\", "/")
     sdk = ctx.env["sdk"].replace("\\", "/")
-    # RelWithDebInfo by default: same optimization as Release but with symbols +
-    # line info, so a crash in the recompiled code points straight at the generated
-    # sub_XXXX + line -- the heal/gate debug loop's biggest pain. Codegen is
-    # unaffected (the build type never changes generated/), so it's zero-regression
-    # for the codegen gate. Set REXAUTO_BUILD_TYPE=Release for a stripped, smaller
-    # distribution build.
     build_type = os.environ.get("REXAUTO_BUILD_TYPE", "RelWithDebInfo")
-    configure = ('cmake --preset win-amd64-release -DCMAKE_BUILD_TYPE=%s '
-                 # map imported libs (spdlog/fmt) to their Release variant under
-                 # RelWithDebInfo, else CMake links spdlogd.lib (_ITERATOR_DEBUG_LEVEL=2)
-                 # against our IDL=0 objects -> lld-link /failifmismatch. Harmless for Release.
-                 '-DCMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO=Release -DCMAKE_C_COMPILER="%s" '
-                 '-DCMAKE_CXX_COMPILER="%s" -DCMAKE_PREFIX_PATH="%s" '
-                 '-Drexglue_DIR="%s/lib/cmake/rexglue"'
+    configure = (cmake_cmd + ' --preset win-amd64-release -DCMAKE_BUILD_TYPE=%s '
+                 '-DCMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO=Release '
+                 '-DCMAKE_C_COMPILER="%s" -DCMAKE_CXX_COMPILER="%s" '
+                 '-DCMAKE_PREFIX_PATH="%s" -Drexglue_DIR="%s/lib/cmake/rexglue" '
+                 '-DCMAKE_MAKE_PROGRAM:FILEPATH="%s"'
                  % (build_type, ctx.env["clang"].replace("\\", "/"),
-                    ctx.env["clangxx"].replace("\\", "/"), sdk, sdk))
-    # Perf win #4 (strip per-round reconfigure): every heal round used to pay a
-    # full `cmake --preset` (~5-15s) even though nothing about the configuration
-    # changed. The bat now configures only when the build dir has no
-    # CMakeCache.txt; a CHANGE in configure inputs (build type, compilers, SDK
-    # path) is detected here python-side via a stamp file and forces a fresh
-    # configure by deleting the cache. Output-neutral: the configure command is
-    # byte-identical when it does run.
+                    ctx.env["clangxx"].replace("\\", "/"), sdk, sdk, ninja_path))
     bdir = os.path.join(ctx.port, "out", "build", "win-amd64-release")
     stamp = os.path.join(ctx.work, "_configure.stamp")
     old = open(stamp, encoding="utf-8").read() if os.path.exists(stamp) else None
@@ -989,25 +1001,29 @@ def write_build_bat(ctx, parallel=None):
             os.remove(os.path.join(bdir, "CMakeCache.txt"))
         except OSError:
             pass
-        open(stamp, "w", encoding="utf-8").write(configure)
+        with open(stamp, "w", encoding="utf-8") as f:
+            f.write(configure)
     lines = [
         "@echo off",
         'call "%s" >nul' % ctx.env["vcvars"],
+        'if errorlevel 1 (',
+        '  echo [reuaito] ERROR: Visual Studio vcvars64.bat failed. Check VCVARS.',
+        '  exit /b 9009',
+        ')',
         'cd /d "%s"' % ctx.port,
+        'if errorlevel 1 exit /b 1',
         'if not exist "out\\build\\win-amd64-release\\CMakeCache.txt" (',
         "  " + configure,
-        ")",
-        "cmake --build out/build/win-amd64-release --parallel%s -- -k 0" % (
+        '  if errorlevel 1 exit /b 1',
+        ')',
+        cmake_cmd + " --build out/build/win-amd64-release --parallel%s -- -k 0" % (
             " %d" % parallel if parallel else ""),
-        # capture the build's errorlevel BEFORE echo resets it -- `echo RC=...`
-        # used to be the last command, so the bat's exit code was ALWAYS 0 and
-        # a failed heal-round rebuild silently relaunched the stale exe (the
-        # Gears of War 3 ghost-target loop).
         "set BUILDRC=%errorlevel%",
         "echo RC=%BUILDRC%",
         "exit /b %BUILDRC%",
     ]
-    open(bat, "w").write("\r\n".join(lines) + "\r\n")
+    with open(bat, "w") as f:
+        f.write("\r\n".join(lines) + "\r\n")
     return bat
 
 
@@ -3210,7 +3226,8 @@ def verify_switch_tables(ctx, switches=None, work=None):
 
 
 def stage_build(ctx):
-    miss = [k for k in ("vcvars", "clang", "clangxx", "sdk") if not ctx.env[k]]
+    miss = [k for k in ("vcvars", "clang", "clangxx", "sdk", "cmake", "ninja")
+            if not ctx.env.get(k)]
     if miss:
         raise SystemExit("missing build tools: %s (set via env vars or install)" % ", ".join(miss))
     write_game_icon(ctx)
@@ -4651,7 +4668,11 @@ def preflight(env, args=None):
                 ("clang", env.get("clang"), "Setup -> LLVM / clang (winget)"),
                 ("clang++", env.get("clangxx"), "Setup -> LLVM / clang (winget)"),
                 ("MSVC linker + Windows SDK", env.get("vcvars"),
-                 "Setup -> VS Build Tools (winget)")]
+                 "Setup -> VS Build Tools (winget)"),
+                ("CMake build system", env.get("cmake"),
+                 "Setup -> CMake (winget), then restart Reuaito"),
+                ("Ninja build tool", env.get("ninja"),
+                 "Setup -> Ninja (winget), then restart Reuaito")]
     missing = [(n, h) for n, v, h in blocking if not v]
     if missing:
         lines = ["rexauto cannot build this title -- %d required tool(s) missing:"
