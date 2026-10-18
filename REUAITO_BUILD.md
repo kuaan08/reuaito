@@ -19,3 +19,41 @@ through the application's Setup screen. Successful packaging
 is not proof that any commercial Xbox 360 game can run.
 
 Original project: https://github.com/Player124413/rexauto
+
+## Windows recompilation: RC=9009 and missing CMake
+
+If the live pipeline stops at **Recompile** (sometimes around 57%) and
+`_build.log` contains:
+
+```text
+'cmake' is not recognized as an internal or external command
+RC=9009
+```
+
+this indicates a **host build tool cannot be executed**, not that a
+PowerPC function or game asset was rejected. A separate
+`'Fastboot++\\'` command error may indicate that a Windows PATH
+entry or the Visual Studio environment script is malformed.
+
+The fork now detects both **CMake** and **Ninja**, shows them in **Setup**,
+and resolves absolute executable paths *before* running `vcvars64.bat`.
+It passes the verified Ninja path to the CMake preset and aborts
+immediately if Visual Studio initialization or CMake configuration fails.
+
+Use **Setup → CMake** and **Setup → Ninja** to install them, or run:
+
+```powershell
+winget install --id Kitware.CMake --exact
+winget install --id Ninja-build.Ninja --exact
+```
+
+Restart the application after installation, then reopen **Setup** and
+confirm both are found. If you have unusual tool locations, use the
+`CMAKE` and `NINJA` environment variables with full executable paths.
+For example, `CMAKE=C:\\Program Files\\CMake\\bin\\cmake.exe`.
+
+The existing title's `default.xex`, files and progress should be
+left intact. The pipeline can reuse generated objects if its
+configuration remains compatible. A successful native compilation
+still does not guarantee the title will boot or render correctly.
+
