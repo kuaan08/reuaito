@@ -95,6 +95,12 @@ def deps_status():
         {"key": "clang", "name": "LLVM / clang", "found": bool(e["clang"] and e["clangxx"]),
          "detail": e["clang"] or "not found", "action": "llvm",
          "note": "C++ compiler (winget)"},
+        {"key": "cmake", "name": "CMake", "found": bool(e.get("cmake")),
+         "detail": e.get("cmake") or "not found", "action": "cmake",
+         "note": "required for native Xbox 360 port CMake configuration"},
+        {"key": "ninja", "name": "Ninja", "found": bool(e.get("ninja")),
+         "detail": e.get("ninja") or "not found", "action": "ninja",
+         "note": "required by ReXGlue's Windows Ninja build preset"},
         {"key": "vcvars", "name": "VS Build Tools", "found": bool(e["vcvars"]),
          "detail": e["vcvars"] or "not found", "action": "vs",
          "note": "MSVC linker + Windows SDK (winget)"},
@@ -260,6 +266,10 @@ def run(target, emit):
             ok = install_rexglue(emit)
         elif target == "llvm":
             ok = _winget(["--id", "LLVM.LLVM"], emit)
+        elif target == "cmake":
+            ok = _winget(["--id", "Kitware.CMake"], emit)
+        elif target == "ninja":
+            ok = _winget(["--id", "Ninja-build.Ninja"], emit)
         elif target == "vs":
             ok = _winget(["--id", "Microsoft.VisualStudio.2022.BuildTools", "--override",
                           "--passive --add Microsoft.VisualStudio.Workload.VCTools "
