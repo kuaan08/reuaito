@@ -1,0 +1,70 @@
+name: Build Reuaito Windows EXE
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**/*.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install packaging requirements
+        run: python -m pip install -r .github/requirements-windows-build.txt
+      - name: Validate Python source and CLI
+        shell: pwsh
+        run: |
+          python -m compileall -q app.py rexauto.py gui extract.py heal.py
+          python rexauto.py --help
+      - name: Build Windows application
+        shell: pwsh
+        run: |
+          $buildArgs = @(
+            '--noconfirm', '--onefile', '--windowed',
+            '--name', 'reuaito',
+            '--icon', 'gui/rexauto.ico',
+            '--add-data', 'gui/index.html;gui',
+            '--add-data', 'vendor/xenon-jumptables;xenon-jumptables',
+            '--add-data', 'thirdparty/libmspack;thirdparty/libmspack',
+            '--add-data', 'tools;tools',
+            '--paths', 'gui',
+            '--hidden-import', 'extract',
+            '--hidden-import', 'heal',
+            '--hidden-import', 'closure',
+            '--hidden-import', 'codegen_patches',
+            '--hidden-import', 'jt_landings',
+            '--hidden-import', 'rexauto',
+            '--hidden-import', 'detect_setjmp',
+            '--hidden-import', 'server',
+            '--hidden-import', 'setup',
+            '--collect-all', 'webview',
+            'app.py'
+          )
+          python -m PyInstaller @buildArgs
+          if ($LASTEXITCODE -ne 0) { throw 'PyInstaller failed' }
+      - name: Validate output and print checksum
+        shell: pwsh
+        run: |
+          $file = 'dist/reuaito.exe'
+          if (!(Test-Path $file)) { throw 'Missing Windows EXE' }
+          $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path $file).Path)
+          if ($bytes.Length -lt 1000000 -or $bytes[0] -ne 77 -or $bytes[1] -ne 90) {
+            throw 'Output is not a valid Windows PE executable'
+          }
+          Get-FileHash $file -Algorithm SHA256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Reuaito-Windows-x64
+          path: dist/reuaito.exe
+          retention-days: 14
+          if-no-files-found: error
