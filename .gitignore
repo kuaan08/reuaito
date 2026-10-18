@@ -1,0 +1,20 @@
+__pycache__/
+*.pyc
+build/
+dist/
+*.spec
+*.zip
+rexglue/
+# Only a hand-cloned checkout AT THE ROOT is ignored. vendor/xenon-jumptables/
+# is the bundled copy that ships inside rexauto and must stay tracked.
+/xenon-jumptables/
+autoports/
+.rexauto_state
+.claude/
+covers/
+cache/
+tools/xctd_rip.exe
+thirdparty/libmspack/*.o
+# the xctd decoder is now built beside its cache, not into the source tree
+tools/*.o
+tools/xctd_rip.exe
